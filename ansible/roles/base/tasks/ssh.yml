@@ -1,0 +1,46 @@
+---
+- name: Harden sshd_config
+  ansible.builtin.template:
+    src: sshd_config.j2
+    dest: /etc/ssh/sshd_config.d/99-homelab.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd
+
+- name: Add bootstrap SSH key (temporary)
+  ansible.posix.authorized_key:
+    user: homelab
+    state: present
+    key: "{{ bootstrap_ssh_key }}"
+    comment: "Bootstrap key — removed after Tailscale SSH"
+
+- name: Ensure SSH service is running
+  ansible.builtin.service:
+    name: ssh
+    state: started
+    enabled: true
+
+- name: Allow SSH through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port }}"
+    proto: tcp
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+
+- name: Allow all outgoing traffic
+  community.general.ufw:
+    policy: allow
+    direction: outgoing
+
+- name: Allow all traffic on Tailscale interface
+  community.general.ufw:
+    rule: allow
+    interface: tailscale0
+    direction: in

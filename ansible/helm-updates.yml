@@ -1,0 +1,259 @@
+---
+# Helm Chart Updates Automation
+# Checks for updates, optionally upgrades charts automatically
+#
+# Safe to run via cron — only upgrades if explicitly told
+#
+# Usage:
+#   # Check for available updates (no changes)
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/helm-updates.yml -e helm_action=check
+#   
+#   # Generate upgrade script (shows what would run)
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/helm-updates.yml -e helm_action=generate
+#   
+#   # Perform actual upgrades (with confirmation)
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/helm-updates.yml -e helm_action=upgrade
+
+- name: Pre-flight checks
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: Verify helm_action is set
+      ansible.builtin.assert:
+        that: helm_action is defined
+        fail_msg: "Set helm_action: check, generate, or upgrade"
+
+    - name: Upgrade warning
+      ansible.builtin.pause:
+        prompt: |
+          ⚠️  HELM CHART UPGRADE ⚠️
+          
+          Action: {{ helm_action }}
+          
+          This playbook will:
+          - Update Helm repositories
+          - Check for chart updates
+          - {% if helm_action == 'upgrade' %}Upgrade all charts (tested & stable){% else %}Report available updates{% endif %}
+          
+          Affected charts:
+          - Longhorn (storage)
+          - MetalLB (load balancer)
+          - ingress-nginx (ingress controller)
+          - cert-manager (TLS certificates)
+          
+          Press ENTER to continue or CTRL+C to abort...
+      when: helm_action in ['upgrade']
+
+- name: Update Helm repositories
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Update Helm repos
+      ansible.builtin.shell: helm repo update
+      register: helm_repo_update
+      changed_when: false
+
+    - name: Show repo update
+      ansible.builtin.debug:
+        msg: "{{ helm_repo_update.stdout }}"
+
+- name: Check for chart updates
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Get current Longhorn version
+      ansible.builtin.shell: helm list -n longhorn-system -o json | jq -r '.[0].app_version'
+      register: longhorn_current
+      changed_when: false
+      ignore_errors: true
+
+    - name: Get available Longhorn version
+      ansible.builtin.shell: helm search repo longhorn/longhorn -o json | jq -r '.[0].app_version'
+      register: longhorn_available
+      changed_when: false
+
+    - name: Get current MetalLB version
+      ansible.builtin.shell: helm list -n metallb-system -o json | jq -r '.[0].app_version'
+      register: metallb_current
+      changed_when: false
+      ignore_errors: true
+
+    - name: Get available MetalLB version
+      ansible.builtin.shell: helm search repo metallb/metallb -o json | jq -r '.[0].app_version'
+      register: metallb_available
+      changed_when: false
+
+    - name: Get current ingress-nginx version
+      ansible.builtin.shell: helm list -n ingress-nginx -o json | jq -r '.[0].app_version'
+      register: ingress_current
+      changed_when: false
+      ignore_errors: true
+
+    - name: Get available ingress-nginx version
+      ansible.builtin.shell: helm search repo ingress-nginx/ingress-nginx -o json | jq -r '.[0].app_version'
+      register: ingress_available
+      changed_when: false
+
+    - name: Get current cert-manager version
+      ansible.builtin.shell: helm list -n cert-manager -o json | jq -r '.[0].app_version'
+      register: certmgr_current
+      changed_when: false
+      ignore_errors: true
+
+    - name: Get available cert-manager version
+      ansible.builtin.shell: helm search repo jetstack/cert-manager -o json | jq -r '.[0].app_version'
+      register: certmgr_available
+      changed_when: false
+
+    - name: Display chart update status
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Helm Chart Update Status
+          ========================================
+          
+          Longhorn:
+            Current:   {{ longhorn_current.stdout | default('unknown') }}
+            Available: {{ longhorn_available.stdout | default('unknown') }}
+            Status: {% if longhorn_current.stdout == longhorn_available.stdout %}✓ Up to date{% else %}⚠ Update available{% endif %}
+          
+          MetalLB:
+            Current:   {{ metallb_current.stdout | default('unknown') }}
+            Available: {{ metallb_available.stdout | default('unknown') }}
+            Status: {% if metallb_current.stdout == metallb_available.stdout %}✓ Up to date{% else %}⚠ Update available{% endif %}
+          
+          ingress-nginx:
+            Current:   {{ ingress_current.stdout | default('unknown') }}
+            Available: {{ ingress_available.stdout | default('unknown') }}
+            Status: {% if ingress_current.stdout == ingress_available.stdout %}✓ Up to date{% else %}⚠ Update available{% endif %}
+          
+          cert-manager:
+            Current:   {{ certmgr_current.stdout | default('unknown') }}
+            Available: {{ certmgr_available.stdout | default('unknown') }}
+            Status: {% if certmgr_current.stdout == certmgr_available.stdout %}✓ Up to date{% else %}⚠ Update available{% endif %}
+
+- name: Generate upgrade commands
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Generate upgrade script
+      ansible.builtin.copy:
+        dest: /tmp/helm-upgrades.sh
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          # Generated Helm upgrade commands
+          # Review before running manually
+          
+          set -e
+          
+          echo "Upgrading Helm charts..."
+          
+          # Longhorn
+          echo "Upgrading Longhorn..."
+          helm upgrade longhorn longhorn/longhorn \
+            --namespace longhorn-system \
+            --set persistence.defaultClass=true \
+            --wait
+          
+          # MetalLB
+          echo "Upgrading MetalLB..."
+          helm upgrade metallb metallb/metallb \
+            --namespace metallb-system \
+            --wait
+          
+          # ingress-nginx
+          echo "Upgrading ingress-nginx..."
+          helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
+            --namespace ingress-nginx \
+            --set controller.service.type=LoadBalancer \
+            --wait
+          
+          # cert-manager
+          echo "Upgrading cert-manager..."
+          helm upgrade cert-manager jetstack/cert-manager \
+            --namespace cert-manager \
+            --set installCRDs=true \
+            --wait
+          
+          echo "All charts upgraded successfully!"
+          kubectl get deployment -A
+      register: script_gen
+      when: helm_action in ['generate', 'upgrade']
+
+    - name: Show script path
+      ansible.builtin.debug:
+        msg: |
+          Generated upgrade script: /tmp/helm-upgrades.sh
+          
+          To review before running:
+          cat /tmp/helm-upgrades.sh
+          
+          To execute manually:
+          bash /tmp/helm-upgrades.sh
+      when: helm_action == 'generate'
+
+- name: Execute Helm upgrades
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Upgrade Longhorn
+      ansible.builtin.shell: |
+        helm upgrade longhorn longhorn/longhorn \
+          --namespace longhorn-system \
+          --set persistence.defaultClass=true \
+          --wait
+      when: helm_action == 'upgrade'
+
+    - name: Upgrade MetalLB
+      ansible.builtin.shell: |
+        helm upgrade metallb metallb/metallb \
+          --namespace metallb-system \
+          --wait
+      when: helm_action == 'upgrade'
+
+    - name: Upgrade ingress-nginx
+      ansible.builtin.shell: |
+        helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
+          --namespace ingress-nginx \
+          --set controller.service.type=LoadBalancer \
+          --wait
+      when: helm_action == 'upgrade'
+
+    - name: Upgrade cert-manager
+      ansible.builtin.shell: |
+        helm upgrade cert-manager jetstack/cert-manager \
+          --namespace cert-manager \
+          --set installCRDs=true \
+          --wait
+      when: helm_action == 'upgrade'
+
+    - name: Verify all pods are running
+      ansible.builtin.shell: kubectl get pods -A
+      register: pods_after
+      changed_when: false
+      when: helm_action == 'upgrade'
+
+    - name: Upgrade complete
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Helm Chart Upgrades Complete!
+          ========================================
+          
+          All pods after upgrade:
+          {{ pods_after.stdout }}
+          
+          Verify services are working:
+          - Check ingress: kubectl get ingress -A
+          - Check certificates: kubectl get certificate -A
+          - Monitor logs: kubectl logs -n <namespace> -l <selector>
+      when: helm_action == 'upgrade'

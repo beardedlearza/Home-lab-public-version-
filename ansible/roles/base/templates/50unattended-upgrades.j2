@@ -1,0 +1,20 @@
+// Managed by Ansible — do not edit manually
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}";
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+
+// Never auto-update Kubernetes packages — you control these manually
+Unattended-Upgrade::Package-Blacklist {
+{% for pkg in unattended_upgrades_blacklist %}
+    "{{ pkg }}";
+{% endfor %}
+};
+
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";   // Never reboot k8s nodes automatically
+Unattended-Upgrade::Mail "root";

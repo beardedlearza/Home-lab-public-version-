@@ -1,0 +1,89 @@
+---
+# Phase 2: Kubernetes Bootstrap
+# Install containerd, kubeadm, initialize control plane, join workers
+#
+# Run AFTER: ansible/site.yml (base role)
+# Usage:
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/k8s-bootstrap.yml
+
+- name: Pre-flight checks
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Verify inventory structure
+      ansible.builtin.assert:
+        that:
+          - groups['control_plane'] is defined
+          - groups['workers'] is defined
+        fail_msg: "Inventory must have control_plane and workers groups"
+
+- name: Install containerd on all nodes
+  hosts: k8s_nodes
+  become: true
+  gather_facts: true
+  roles:
+    - role: containerd
+
+- name: Install Kubernetes packages on all nodes
+  hosts: k8s_nodes
+  become: true
+  gather_facts: false
+  roles:
+    - role: kubernetes-common
+
+- name: Initialize control plane and install Flannel
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  roles:
+    - role: kubeadm
+
+- name: Join worker nodes to cluster
+  hosts: workers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check if node is already joined
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Join node to cluster
+      ansible.builtin.shell: |
+        {{ hostvars[groups['control_plane'][0]]['k8s_join_command'] }}
+      when: not kubelet_conf.stat.exists
+      register: worker_join
+
+    - name: Wait for kubelet to initialize
+      ansible.builtin.pause:
+        seconds: 30
+      when: worker_join.changed
+
+- name: Verify cluster is ready
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: Wait for all nodes to be Ready
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf \
+          get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}'
+      register: nodes_status
+      until: "'True' in nodes_status.stdout and nodes_status.stdout.count('True') == 3"
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Display cluster status
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes
+      register: cluster_status
+      changed_when: false
+
+    - name: Print status
+      ansible.builtin.debug:
+        msg: |
+          Kubernetes cluster bootstrapped successfully!
+          
+          {{ cluster_status.stdout }}
+          
+          Next: ansible-playbook -i ansible/inventory/hosts.yml ansible/k8s-install-addons.yml

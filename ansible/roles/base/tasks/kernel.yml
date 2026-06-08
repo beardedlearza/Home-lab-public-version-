@@ -1,0 +1,33 @@
+---
+- name: Load kernel modules now
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ kernel_modules }}"
+
+- name: Ensure kernel modules load at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: "{{ kernel_modules | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply sysctl settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-k8s.conf
+    reload: true
+  loop: "{{ sysctl_settings | dict2items }}"
+
+- name: Disable swap now
+  ansible.builtin.command: swapoff -a
+  changed_when: false
+
+- name: Disable swap permanently
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\s+swap\s+.*)$'
+    replace: '# \1'

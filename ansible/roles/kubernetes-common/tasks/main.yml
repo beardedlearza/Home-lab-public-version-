@@ -1,0 +1,42 @@
+---
+- name: Add Kubernetes apt signing key
+  ansible.builtin.get_url:
+    url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+    dest: /usr/share/keyrings/kubernetes-archive-keyring.gpg
+    mode: "0644"
+
+- name: Add Kubernetes apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /"
+    state: present
+    filename: kubernetes
+
+- name: Install kubeadm, kubelet, kubectl
+  ansible.builtin.apt:
+    name:
+      - kubeadm
+      - kubelet
+      - kubectl
+    state: present
+    update_cache: true
+
+- name: Hold Kubernetes packages at current version
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubeadm
+    - kubelet
+    - kubectl
+
+- name: Enable kubelet service
+  ansible.builtin.service:
+    name: kubelet
+    state: started
+    enabled: true
+
+- name: Create local-path storage directory on all nodes
+  ansible.builtin.file:
+    path: /mnt/local-storage
+    state: directory
+    mode: "0755"

@@ -1,0 +1,88 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@yourdomain.com
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homelab-ingress
+  namespace: ingress-nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - vaultwarden.yourdomain.ts.net
+    - gitea.yourdomain.ts.net
+    - nextcloud.yourdomain.ts.net
+    - immich.yourdomain.ts.net
+    - audiobookshelf.yourdomain.ts.net
+    secretName: homelab-tls
+  rules:
+  - host: vaultwarden.yourdomain.ts.net
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vaultwarden
+            namespace: vaultwarden
+            port:
+              number: 80
+  - host: gitea.yourdomain.ts.net
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gitea
+            namespace: gitea
+            port:
+              number: 80
+  - host: nextcloud.yourdomain.ts.net
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nextcloud
+            namespace: nextcloud
+            port:
+              number: 80
+  - host: immich.yourdomain.ts.net
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: immich
+            namespace: immich
+            port:
+              number: 80
+  - host: audiobookshelf.yourdomain.ts.net
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: audiobookshelf
+            namespace: audiobookshelf
+            port:
+              number: 80

@@ -1,0 +1,197 @@
+---
+# Phase 2b: Install Kubernetes Addons
+# Longhorn, local-path, MetalLB, ingress-nginx, cert-manager
+#
+# Run AFTER: ansible/k8s-bootstrap.yml
+# Usage:
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/k8s-install-addons.yml
+
+- name: Install Helm
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: Check if Helm is installed
+      ansible.builtin.command: helm version
+      register: helm_check
+      failed_when: false
+
+    - name: Install Helm
+      ansible.builtin.shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: helm_check.rc != 0
+
+- name: Install Longhorn storage
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Add Longhorn Helm repo
+      ansible.builtin.shell: |
+        helm repo add longhorn https://charts.longhorn.io
+        helm repo update
+
+    - name: Create longhorn-system namespace
+      kubernetes.core.k8s:
+        name: longhorn-system
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+
+    - name: Install Longhorn
+      ansible.builtin.shell: |
+        helm upgrade --install longhorn longhorn/longhorn \
+          --namespace longhorn-system \
+          --set persistence.defaultClass=true \
+          --set persistence.reclaimPolicy=Delete \
+          --wait
+
+    - name: Wait for Longhorn manager
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf \
+          rollout status -n longhorn-system daemonset.apps/longhorn-manager \
+          --timeout=600s
+      changed_when: false
+
+- name: Install local-path provisioner
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Deploy local-path provisioner
+      ansible.builtin.shell: |
+        kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+
+    - name: Wait for local-path provisioner
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf \
+          wait --for=condition=ready pod \
+          -l app=local-path-provisioner \
+          -n local-path-storage \
+          --timeout=300s
+      changed_when: false
+
+- name: Install MetalLB
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Add MetalLB Helm repo
+      ansible.builtin.shell: |
+        helm repo add metallb https://metallb.universe.tf
+        helm repo update
+
+    - name: Create metallb-system namespace
+      kubernetes.core.k8s:
+        name: metallb-system
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+
+    - name: Install MetalLB
+      ansible.builtin.shell: |
+        helm upgrade --install metallb metallb/metallb \
+          --namespace metallb-system \
+          --wait
+
+    - name: Create MetalLB AddressPool
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition: |
+          apiVersion: metallb.io/v1beta1
+          kind: AddressPool
+          metadata:
+            name: tailscale-pool
+            namespace: metallb-system
+          spec:
+            addresses:
+            - 10.0.0.1-10.0.0.254
+            autoAssign: true
+
+- name: Install ingress-nginx
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Add ingress-nginx Helm repo
+      ansible.builtin.shell: |
+        helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+        helm repo update
+
+    - name: Create ingress-nginx namespace
+      kubernetes.core.k8s:
+        name: ingress-nginx
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+
+    - name: Install ingress-nginx
+      ansible.builtin.shell: |
+        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+          --namespace ingress-nginx \
+          --set controller.service.type=LoadBalancer \
+          --wait
+
+    - name: Wait for ingress controller
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf \
+          -n ingress-nginx wait --for=condition=ready pod \
+          -l app.kubernetes.io/component=controller \
+          --timeout=300s
+      changed_when: false
+
+- name: Install cert-manager
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Add jetstack Helm repo
+      ansible.builtin.shell: |
+        helm repo add jetstack https://charts.jetstack.io
+        helm repo update
+
+    - name: Create cert-manager namespace
+      kubernetes.core.k8s:
+        name: cert-manager
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: /etc/kubernetes/admin.conf
+
+    - name: Install cert-manager
+      ansible.builtin.shell: |
+        helm upgrade --install cert-manager jetstack/cert-manager \
+          --namespace cert-manager \
+          --set installCRDs=true \
+          --wait
+
+    - name: Wait for cert-manager
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf \
+          -n cert-manager wait --for=condition=ready pod \
+          -l app.kubernetes.io/instance=cert-manager \
+          --timeout=300s
+      changed_when: false
+
+- name: Complete
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: Print next steps
+      ansible.builtin.debug:
+        msg: |
+          All cluster addons installed!
+          
+          Next steps:
+          1. kubectl apply -f k8s/base/namespaces.yaml
+          2. kubectl apply -f k8s/base/storage-classes.yaml
+          3. kubectl apply -f k8s/services/
+          4. kubectl apply -f k8s/base/ingress.yaml
+          5. Restore your data from backups

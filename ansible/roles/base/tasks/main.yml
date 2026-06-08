@@ -1,0 +1,21 @@
+---
+- name: Include hostname tasks
+  ansible.builtin.import_tasks: hostname.yml
+
+- name: Include packages tasks
+  ansible.builtin.import_tasks: packages.yml
+
+- name: Include SSH hardening tasks
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Include kernel tasks
+  ansible.builtin.import_tasks: kernel.yml
+
+- name: Include Tailscale tasks
+  ansible.builtin.import_tasks: tailscale.yml
+
+- name: Include unattended-upgrades tasks
+  ansible.builtin.import_tasks: updates.yml
+
+- name: Include Tailscale SSH tasks
+  ansible.builtin.import_tasks: tailscale_ssh.yml

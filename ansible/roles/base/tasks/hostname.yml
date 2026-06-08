@@ -1,0 +1,16 @@
+---
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Update /etc/hosts with all cluster nodes
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "^{{ hostvars[item]['ansible_host'] }}"
+    line: "{{ hostvars[item]['ansible_host'] }} {{ item }}"
+    state: present
+  loop: "{{ groups['k8s_nodes'] }}"
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone }}"

@@ -1,0 +1,23 @@
+---
+# Phase 1: OS Setup
+# Hardening, Tailscale SSH, and k8s prerequisites
+#
+# Usage:
+#   TS_AUTHKEY=tskey-auth-xxx ansible-playbook -i ansible/inventory/hosts.yml ansible/site.yml
+
+- name: Pre-flight checks
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Verify Tailscale auth key is set
+      ansible.builtin.assert:
+        that: lookup('env', 'TS_AUTHKEY') | length > 0
+        fail_msg: "TS_AUTHKEY not set. Get a key from: https://login.tailscale.com/admin/settings/keys"
+      run_once: true
+
+- name: Apply base role to all nodes
+  hosts: k8s_nodes
+  become: true
+  gather_facts: true
+  roles:
+    - role: base

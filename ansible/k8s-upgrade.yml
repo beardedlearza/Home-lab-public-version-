@@ -1,0 +1,240 @@
+---
+# Kubernetes Upgrade Playbook
+# Automates the kubeadm upgrade process with manual approval gates
+#
+# IMPORTANT: Read https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-upgrade/
+# BEFORE running this. Test in non-prod environment first.
+#
+# Usage:
+#   # Step 1: Check what version you're on
+#   kubectl version
+#   
+#   # Step 2: See what versions are available
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/k8s-upgrade.yml -e upgrade_action=check
+#   
+#   # Step 3: Plan the upgrade
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/k8s-upgrade.yml -e upgrade_action=plan -e target_version=v1.31
+#   
+#   # Step 4: Execute upgrade (WITH MANUAL APPROVAL)
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/k8s-upgrade.yml -e upgrade_action=upgrade -e target_version=v1.31
+
+- name: Pre-flight checks
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Verify upgrade_action is set
+      ansible.builtin.assert:
+        that: upgrade_action is defined
+        fail_msg: "Set upgrade_action: check, plan, or upgrade"
+
+    - name: Verify target_version for upgrade
+      ansible.builtin.assert:
+        that: target_version is defined or upgrade_action != 'upgrade'
+        fail_msg: "Set target_version (e.g., v1.31) when upgrade_action=upgrade"
+
+    - name: Warning for upgrade action
+      ansible.builtin.pause:
+        prompt: |
+          ⚠️  KUBERNETES UPGRADE WARNING ⚠️
+          
+          Action: {{ upgrade_action }}
+          {% if target_version is defined %}Target: {{ target_version }}{% endif %}
+          
+          This is a MAJOR operation. Ensure:
+          1. ✓ You have backups
+          2. ✓ You've tested in non-prod
+          3. ✓ All nodes are healthy (kubectl get nodes)
+          4. ✓ No critical workloads mid-deployment
+          
+          Press ENTER to continue or CTRL+C to abort...
+      when: upgrade_action == 'upgrade'
+
+- name: Check current Kubernetes version
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: Get current version
+      ansible.builtin.command: kubeadm version -o short
+      register: current_version
+      changed_when: false
+
+    - name: Display current version
+      ansible.builtin.debug:
+        msg: "Current Kubernetes version: {{ current_version.stdout }}"
+
+- name: Check available kubeadm versions
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: List available versions
+      ansible.builtin.shell: apt-cache policy kubeadm | grep Candidate
+      register: available_versions
+      changed_when: false
+      when: upgrade_action == 'check'
+
+    - name: Show available versions
+      ansible.builtin.debug:
+        msg: "{{ available_versions.stdout }}"
+      when: upgrade_action == 'check'
+
+- name: Plan Kubernetes upgrade
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: Run kubeadm upgrade plan
+      ansible.builtin.shell: kubeadm upgrade plan
+      register: upgrade_plan
+      changed_when: false
+      when: upgrade_action == 'plan'
+
+    - name: Display upgrade plan
+      ansible.builtin.debug:
+        msg: "{{ upgrade_plan.stdout }}"
+      when: upgrade_action == 'plan'
+
+- name: Upgrade control plane
+  hosts: control_plane
+  gather_facts: false
+  tasks:
+    - name: Upgrade kubeadm on control plane
+      ansible.builtin.shell: |
+        apt-get install -y kubeadm={{ target_version }}*
+        kubeadm upgrade apply {{ target_version }}
+      when: upgrade_action == 'upgrade'
+      register: cp_upgrade
+
+    - name: Display control plane upgrade result
+      ansible.builtin.debug:
+        msg: "{{ cp_upgrade.stdout_lines[-10:] }}"
+      when: upgrade_action == 'upgrade'
+
+    - name: Drain control plane
+      ansible.builtin.shell: |
+        kubectl drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data --skip-wait-for-delete-timeout=5s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: upgrade_action == 'upgrade'
+
+    - name: Upgrade kubelet on control plane
+      ansible.builtin.shell: |
+        apt-get install -y kubelet={{ target_version }}* kubectl={{ target_version }}*
+        systemctl daemon-reload
+        systemctl restart kubelet
+      when: upgrade_action == 'upgrade'
+
+    - name: Wait for kubelet to be ready
+      ansible.builtin.pause:
+        seconds: 30
+      when: upgrade_action == 'upgrade'
+
+    - name: Uncordon control plane
+      ansible.builtin.shell: |
+        kubectl uncordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      when: upgrade_action == 'upgrade'
+
+- name: Upgrade worker nodes
+  hosts: workers
+  gather_facts: false
+  serial: 1  # One worker at a time to maintain availability
+  tasks:
+    - name: Drain worker node
+      ansible.builtin.shell: |
+        kubectl drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data --skip-wait-for-delete-timeout=5s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      delegate_to: "{{ groups['control_plane'][0] }}"
+      when: upgrade_action == 'upgrade'
+
+    - name: Upgrade kubeadm on worker
+      ansible.builtin.shell: |
+        apt-get install -y kubeadm={{ target_version }}*
+        kubeadm upgrade node
+      when: upgrade_action == 'upgrade'
+
+    - name: Upgrade kubelet on worker
+      ansible.builtin.shell: |
+        apt-get install -y kubelet={{ target_version }}* kubectl={{ target_version }}*
+        systemctl daemon-reload
+        systemctl restart kubelet
+      when: upgrade_action == 'upgrade'
+
+    - name: Wait for kubelet to be ready
+      ansible.builtin.pause:
+        seconds: 30
+      when: upgrade_action == 'upgrade'
+
+    - name: Uncordon worker node
+      ansible.builtin.shell: |
+        kubectl uncordon {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      delegate_to: "{{ groups['control_plane'][0] }}"
+      when: upgrade_action == 'upgrade'
+
+- name: Verify upgrade completion
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Get all nodes
+      ansible.builtin.shell: kubectl get nodes
+      register: nodes_after
+      changed_when: false
+      when: upgrade_action == 'upgrade'
+
+    - name: Get component versions
+      ansible.builtin.shell: kubectl get nodes -o wide
+      register: nodes_versions
+      changed_when: false
+      when: upgrade_action == 'upgrade'
+
+    - name: Verify all nodes are Ready
+      ansible.builtin.shell: |
+        kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}'
+      register: nodes_ready
+      until: "'False' not in nodes_ready.stdout"
+      retries: 30
+      delay: 10
+      changed_when: false
+      when: upgrade_action == 'upgrade'
+
+    - name: Check pod status
+      ansible.builtin.shell: kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded
+      register: pod_check
+      changed_when: false
+      when: upgrade_action == 'upgrade'
+
+    - name: Upgrade complete
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Kubernetes Upgrade Complete!
+          ========================================
+          
+          All nodes:
+          {{ nodes_after.stdout }}
+          
+          Component versions:
+          {{ nodes_versions.stdout }}
+          
+          Next: Verify all applications are working
+          1. kubectl get pods -A (all should be Running)
+          2. Test each service
+          3. Commit to Git (if versions changed in manifests)
+      when: upgrade_action == 'upgrade'
+
+    - name: Summary for other actions
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Next Steps
+          ========================================
+          
+          Current action: {{ upgrade_action }}
+          
+          To proceed with upgrade:
+          ansible-playbook -i ansible/inventory/hosts.yml ansible/k8s-upgrade.yml -e upgrade_action=upgrade -e target_version=<VERSION>
+      when: upgrade_action != 'upgrade'

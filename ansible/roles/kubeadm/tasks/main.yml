@@ -1,0 +1,63 @@
+---
+- name: Check if cluster is already initialized
+  ansible.builtin.stat:
+    path: /etc/kubernetes/admin.conf
+  register: kubeadm_init_done
+
+- name: Initialize Kubernetes control plane
+  ansible.builtin.shell: |
+    kubeadm init \
+      --apiserver-advertise-address={{ hostvars[inventory_hostname]['ansible_host'] }} \
+      --pod-network-cidr=10.244.0.0/16 \
+      --service-cidr=10.96.0.0/12 \
+      --token-ttl=0 \
+      --skip-token-print
+  when: not kubeadm_init_done.stat.exists
+  register: kubeadm_init_output
+
+- name: Create .kube directory for homelab user
+  ansible.builtin.file:
+    path: /home/homelab/.kube
+    state: directory
+    owner: homelab
+    group: homelab
+    mode: "0755"
+
+- name: Copy kubeconfig to homelab user
+  ansible.builtin.shell: |
+    sudo cp /etc/kubernetes/admin.conf /home/homelab/.kube/config
+    sudo chown homelab:homelab /home/homelab/.kube/config
+    sudo chmod 600 /home/homelab/.kube/config
+  when: not kubeadm_init_done.stat.exists
+
+- name: Wait for kube-apiserver to be ready
+  ansible.builtin.shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes
+  register: api_ready
+  until: api_ready.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Install Flannel CNI
+  ansible.builtin.shell: |
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf \
+      apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+  changed_when: false
+
+- name: Wait for Flannel to be ready
+  ansible.builtin.shell: |
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf \
+      wait --for=condition=ready pod \
+      -l app=flannel \
+      -n kube-flannel-cfg \
+      --timeout=300s
+  changed_when: false
+
+- name: Get join command for worker nodes
+  ansible.builtin.shell: kubeadm token create --ttl=0 --print-join-command
+  register: kubeadm_join_cmd
+  changed_when: false
+
+- name: Store join command as fact
+  ansible.builtin.set_fact:
+    k8s_join_command: "{{ kubeadm_join_cmd.stdout }}"

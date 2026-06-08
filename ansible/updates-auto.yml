@@ -1,0 +1,128 @@
+---
+# Automated Updates Playbook
+# Monitors and reports on unattended-upgrades status
+# Optionally triggers Helm chart updates
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/updates-auto.yml
+#
+# Can be run weekly via cron:
+#   0 2 * * 0 cd /path/to/homelab && ansible-playbook -i ansible/inventory/hosts.yml ansible/updates-auto.yml
+
+- name: Check OS security updates status
+  hosts: k8s_nodes
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Get unattended-upgrades log (last 50 lines)
+      ansible.builtin.shell: tail -50 /var/log/unattended-upgrades/unattended-upgrades.log 2>/dev/null || echo "No upgrade log yet"
+      register: upgrade_log
+      changed_when: false
+
+    - name: Display upgrade status
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} Upgrade Status ===
+          
+          {{ upgrade_log.stdout }}
+          
+          Last modified: {{ (ansible_date_time.iso8601_basic_short) }}
+
+    - name: Check for pending security updates
+      ansible.builtin.shell: |
+        apt-get update -qq && apt-get upgrade -s -qq | grep -i security || echo "No security updates available"
+      register: pending_updates
+      changed_when: false
+      ignore_errors: true
+
+    - name: Report pending updates
+      ansible.builtin.debug:
+        msg: "Pending security updates:\n{{ pending_updates.stdout }}"
+
+- name: Update Helm chart repositories
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Update all Helm repos
+      ansible.builtin.shell: helm repo update
+      changed_when: false
+      register: helm_update
+
+    - name: Check for chart updates
+      ansible.builtin.shell: |
+        echo "=== Longhorn ==="
+        helm search repo longhorn/longhorn --version 2>/dev/null | tail -1 || echo "Check manually"
+        
+        echo ""
+        echo "=== MetalLB ==="
+        helm search repo metallb/metallb --version 2>/dev/null | tail -1 || echo "Check manually"
+        
+        echo ""
+        echo "=== ingress-nginx ==="
+        helm search repo ingress-nginx/ingress-nginx --version 2>/dev/null | tail -1 || echo "Check manually"
+        
+        echo ""
+        echo "=== cert-manager ==="
+        helm search repo jetstack/cert-manager --version 2>/dev/null | tail -1 || echo "Check manually"
+      register: helm_updates
+      changed_when: false
+
+    - name: Display Helm update status
+      ansible.builtin.debug:
+        msg: |
+          === Available Helm Chart Updates ===
+          
+          Current installed versions:
+          
+          {{ helm_updates.stdout }}
+          
+          To upgrade a chart:
+          helm upgrade <release-name> <chart-name> --namespace <namespace> --wait
+
+- name: Verify cluster health after updates
+  hosts: control_plane
+  gather_facts: false
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Check node status
+      ansible.builtin.shell: kubectl get nodes -o wide
+      register: nodes_status
+      changed_when: false
+
+    - name: Check pod status (errors only)
+      ansible.builtin.shell: |
+        kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded 2>/dev/null || echo "All pods healthy"
+      register: pod_status
+      changed_when: false
+
+    - name: Display cluster health
+      ansible.builtin.debug:
+        msg: |
+          === Cluster Health ===
+          
+          Nodes:
+          {{ nodes_status.stdout }}
+          
+          Non-running pods (if any):
+          {{ pod_status.stdout }}
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Update Check Complete
+          ========================================
+          
+          ✓ OS security patches: auto-applied by unattended-upgrades
+          ✓ Helm charts: reviewed above (manual upgrade when ready)
+          ✓ Kubernetes: check manually before upgrading
+          ✓ Services: update image tags in k8s/services/*.yaml
+          
+          Next manual steps (if updates available):
+          1. Review Helm chart changelogs
+          2. Test upgrades in non-prod first
+          3. Update via: helm upgrade <name> <chart> -n <ns>
+          4. Commit manifest changes to Git

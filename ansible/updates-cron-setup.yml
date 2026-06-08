@@ -1,0 +1,118 @@
+---
+# Automated Update Monitoring Setup
+# Installs cron jobs to regularly check for updates
+# Reports via email or to a log file
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/updates-cron-setup.yml
+
+- name: Install update monitoring cron jobs
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Create updates directory
+      ansible.builtin.file:
+        path: /var/log/homelab-updates
+        state: directory
+        mode: "0755"
+
+    - name: Install update check script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/homelab-update-check.sh
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          # Homelab automatic update checker
+          # Logs to /var/log/homelab-updates/
+          
+          set -e
+          
+          LOG_DIR="/var/log/homelab-updates"
+          LOG_FILE="$LOG_DIR/update-check-$(date +%Y-%m-%d).log"
+          
+          {
+            echo "========================================="
+            echo "Homelab Update Check"
+            echo "Date: $(date)"
+            echo "========================================="
+            echo ""
+            
+            # OS Security Updates
+            echo "--- OS Security Updates ---"
+            apt-get update -qq
+            apt-get upgrade -s -qq | grep -i security || echo "No security updates available"
+            echo ""
+            
+            # Kubernetes version
+            echo "--- Kubernetes Version ---"
+            kubeadm version -o short
+            echo ""
+            
+            # Helm chart updates
+            echo "--- Available Helm Updates ---"
+            cd /home/ansible-user/homelab-infra || cd /root/homelab
+            helm repo update 2>/dev/null || true
+            
+            echo "Longhorn:"
+            helm search repo longhorn/longhorn 2>/dev/null | tail -1 || echo "N/A"
+            
+            echo "MetalLB:"
+            helm search repo metallb/metallb 2>/dev/null | tail -1 || echo "N/A"
+            
+            echo "ingress-nginx:"
+            helm search repo ingress-nginx/ingress-nginx 2>/dev/null | tail -1 || echo "N/A"
+            
+            echo "cert-manager:"
+            helm search repo jetstack/cert-manager 2>/dev/null | tail -1 || echo "N/A"
+            
+            echo ""
+            echo "========================================="
+            
+          } | tee -a "$LOG_FILE"
+
+    - name: Install cron job for weekly update checks
+      ansible.builtin.cron:
+        name: "Homelab weekly update check"
+        user: root
+        minute: "0"
+        hour: "2"
+        weekday: "0"  # Sunday at 2 AM
+        job: "/usr/local/bin/homelab-update-check.sh > /var/log/homelab-updates/cron.log 2>&1"
+
+    - name: Install log rotation for update checks
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/homelab-updates
+        content: |
+          /var/log/homelab-updates/*.log {
+            weekly
+            rotate 4
+            compress
+            delaycompress
+            missingok
+            notifempty
+            create 0644 root root
+          }
+
+    - name: Display cron job status
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Update Monitoring Cron Setup
+          ========================================
+          
+          ✓ Weekly update check installed
+          ✓ Runs every Sunday at 2:00 AM
+          ✓ Logs to: /var/log/homelab-updates/
+          
+          To view logs:
+          tail -f /var/log/homelab-updates/*.log
+          
+          To run update check manually:
+          /usr/local/bin/homelab-update-check.sh
+          
+          To manually trigger Ansible updates:
+          - OS security: Automatic via unattended-upgrades
+          - Kubernetes: ansible-playbook ansible/k8s-upgrade.yml
+          - Helm charts: ansible-playbook ansible/helm-updates.yml
+          - Services: Update image tags in k8s/services/

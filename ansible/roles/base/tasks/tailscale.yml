@@ -1,0 +1,48 @@
+---
+- name: Add Tailscale apt signing key
+  ansible.builtin.get_url:
+    url: https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: "0644"
+
+- name: Add Tailscale apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main"
+    state: present
+    filename: tailscale
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    update_cache: true
+
+- name: Enable and start tailscaled
+  ansible.builtin.service:
+    name: tailscaled
+    state: started
+    enabled: true
+
+- name: Check if already authenticated to Tailscale
+  ansible.builtin.command: tailscale status --json
+  register: ts_status
+  changed_when: false
+  failed_when: false
+
+- name: Authenticate to Tailscale with SSH enabled
+  ansible.builtin.command: >
+    tailscale up
+    --authkey={{ tailscale_auth_key }}
+    --hostname={{ inventory_hostname }}
+    --accept-routes={{ tailscale_accept_routes | lower }}
+    --advertise-exit-node={{ tailscale_advertise_exit_node | lower }}
+    {% if tailscale_ssh_enabled %}--ssh{% endif %}
+  when:
+    - tailscale_auth_key | length > 0
+    - (ts_status.stdout | from_json).BackendState != "Running"
+  no_log: true
+
+- name: Verify Tailscale is up
+  ansible.builtin.command: tailscale status
+  register: ts_final
+  changed_when: false

@@ -1,0 +1,38 @@
+---
+- name: Wait for Tailscale to fully initialize
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Check if Tailscale SSH is enabled
+  ansible.builtin.shell: |
+    tailscale status --json | grep -q '"TailscaleSSHEnabled":true'
+  register: ts_ssh_check
+  changed_when: false
+  failed_when: false
+
+- name: Remove bootstrap SSH key (no longer needed)
+  ansible.posix.authorized_key:
+    user: homelab
+    state: absent
+    key: "{{ bootstrap_ssh_key }}"
+  when: ts_ssh_check.rc == 0
+
+- name: Disable OpenSSH daemon (Tailscale SSH replaces it)
+  ansible.builtin.service:
+    name: ssh
+    state: stopped
+    enabled: false
+  when: ts_ssh_check.rc == 0
+  ignore_errors: true
+
+- name: Create file indicating Tailscale SSH is active
+  ansible.builtin.copy:
+    dest: /home/homelab/.tailscale-ssh-enabled
+    content: |
+      Tailscale SSH is now active on this node.
+      Connect with: ssh homelab@{{ inventory_hostname }}
+      (uses your Tailscale identity, no SSH key needed)
+    owner: homelab
+    group: homelab
+    mode: "0644"
+  when: ts_ssh_check.rc == 0

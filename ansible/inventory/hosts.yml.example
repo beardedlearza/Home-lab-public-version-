@@ -1,0 +1,30 @@
+---
+# EXAMPLE INVENTORY — Copy to ansible/inventory/hosts.yml and customize with YOUR IPs
+# This file is intentionally named .example so it stays in Git as a safe template
+
+all:
+  children:
+    control_plane:
+      hosts:
+        cp-01:
+          ansible_host: 192.168.1.10      # ← CHANGE TO YOUR IP
+          tailscale_hostname: cp-01
+
+    workers:
+      hosts:
+        worker-01:
+          ansible_host: 192.168.1.11      # ← CHANGE TO YOUR IP
+          tailscale_hostname: worker-01
+        worker-02:
+          ansible_host: 192.168.1.12      # ← CHANGE TO YOUR IP
+          tailscale_hostname: worker-02
+
+    k8s_nodes:
+      children:
+        control_plane:
+        workers:
+
+  vars:
+    ansible_user: homelab
+    ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+    ansible_python_interpreter: /usr/bin/python3

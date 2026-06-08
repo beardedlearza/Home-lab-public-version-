@@ -1,0 +1,120 @@
+#cloud-config
+# EXAMPLE AUTOINSTALL CONFIG — Copy to autoinstall/worker-01/user-data and customize
+# This file is a template showing what needs to be changed
+
+autoinstall:
+  version: 1
+
+  locale: en_GB.UTF-8
+  keyboard:
+    layout: gb
+
+  # ── NETWORK — CHANGE THESE VALUES ──────────────────────────────────────
+  network:
+    version: 2
+    ethernets:
+      eno1:                              # Check your NIC name with: ip link
+        dhcp4: false
+        addresses:
+          - 192.168.1.11/24              # ← CHANGE TO YOUR IP
+        gateway4: 192.168.1.1            # ← CHANGE TO YOUR ROUTER IP
+        nameservers:
+          addresses: [1.1.1.1, 8.8.8.8]
+
+  # ── STORAGE ────────────────────────────────────────────────────────────
+  storage:
+    layout:
+      name: direct
+    config:
+      - type: disk
+        id: disk0
+        ptable: gpt
+        wipe: superblock-recursive
+        grub_device: true
+      - type: partition
+        id: part-efi
+        device: disk0
+        size: 512M
+        flag: boot
+      - type: partition
+        id: part-root
+        device: disk0
+        size: 60G
+      - type: partition
+        id: part-data
+        device: disk0
+        size: -1
+      - type: format
+        id: fmt-efi
+        volume: part-efi
+        fstype: fat32
+      - type: format
+        id: fmt-root
+        volume: part-root
+        fstype: ext4
+      - type: format
+        id: fmt-data
+        volume: part-data
+        fstype: ext4
+      - type: mount
+        id: mnt-efi
+        device: fmt-efi
+        path: /boot/efi
+      - type: mount
+        id: mnt-root
+        device: fmt-root
+        path: /
+      - type: mount
+        id: mnt-data
+        device: fmt-data
+        path: /var
+
+  # ── IDENTITY — CHANGE THESE VALUES ────────────────────────────────────
+  identity:
+    hostname: worker-01                     # This is correct for control plane
+    username: homelab
+    # Generate password hash with: echo "yourpassword" | mkpasswd --method=SHA-512 --stdin
+    password: "$6$CHANGEME$replacethiswithahashedpasswordstring"  # ← CHANGE THIS
+
+  # ── SSH — CHANGE YOUR BOOTSTRAP KEY ────────────────────────────────────
+  ssh:
+    install-server: true
+    allow-pw: false
+    # Get your key with: cat ~/.ssh/id_ed25519.pub
+    # This key is TEMPORARY — removed after Tailscale SSH is working
+    authorized-keys:
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... YOUR-BOOTSTRAP-KEY-HERE"  # ← CHANGE THIS
+
+  # ── PACKAGES ───────────────────────────────────────────────────────────
+  packages:
+    - curl
+    - wget
+    - git
+    - vim
+    - htop
+    - net-tools
+    - nfs-common
+    - open-iscsi
+    - qemu-guest-agent
+
+  # ── LATE COMMANDS ──────────────────────────────────────────────────────
+  late-commands:
+    - swapoff -a
+    - sed -i '/\sswap\s/d' /target/etc/fstab
+
+    - |
+      cat <<EOF > /target/etc/modules-load.d/k8s.conf
+      overlay
+      br_netfilter
+      EOF
+
+    - |
+      cat <<EOF > /target/etc/sysctl.d/99-k8s.conf
+      net.bridge.bridge-nf-call-iptables  = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward                 = 1
+      EOF
+
+    - curtin in-target --target=/target -- timedatectl set-timezone Europe/London
+
+  shutdown: reboot
