@@ -46,7 +46,6 @@ Done. Your infrastructure is now in Git on your tailnet.
 
 **Hardware:**
 - 3× HP EliteDesk 800 G2 Mini (or compatible)
-- 10-way PDU (for power)
 - 2× 1TB+ M.2 2242 SATA drives (or 2280 NVMe if it fits)
 - Backup storage for your data (NAS, external drive, cloud)
 
@@ -66,25 +65,25 @@ Done. Your infrastructure is now in Git on your tailnet.
 
 ```
 ┌─────────────────────── Tailscale Mesh (100.x.x.x) ──────────────────────┐
-│                                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                │
-│  │  cp-01       │    │  worker-01   │    │  worker-02   │                │
-│  │ 192.168.1.10 │    │ 192.168.1.11 │    │ 192.168.1.12 │                │
-│  │              │    │              │    │              │                │
-│  │ • Pi-hole    │    │ • Vaultwarden│    │ • Immich     │                │
-│  │ • etcd       │    │ • Gitea      │    │ • Audiobooksh│                │
-│  │ • kube-apisvr│    │ • Nextcloud  │    │              │                │
-│  │ • Postgres   │    │ • Redis      │    │ ← 1TB NVMe   │                │
-│  │              │    │ ← 1TB NVMe   │    │              │                │
-│  └──────────────┘    └──────────────┘    └──────────────┘                │
-│         ↓                    ↓                    ↓                        │
-│   Longhorn + local-path storage on each node    │        │
-│         ↓                    ↓                    ↓        │
-│   All services accessible via ingress-nginx + TLS   │
-│         ↓                    ↓                    ↓        │
-│   Pi-hole DNS on MetalLB IP (10.0.0.1)              │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+│                                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐               │
+│  │  cp-01       │    │  worker-01   │    │  worker-02   │               │
+│  │ 192.168.1.10 │    │ 192.168.1.11 │    │ 192.168.1.12 │               │
+│  │              │    │              │    │              │               │
+│  │ • Pi-hole    │    │ • Vaultwarden│    │ • Immich     │               │
+│  │ • etcd       │    │ • Gitea      │    │ • Audiobooksh│               │
+│  │ • kube-apisvr│    │ • Nextcloud  │    │              │               │
+│  │ • Postgres   │    │ • Redis      │    │ ← 1TB NVMe   │               │
+│  │              │    │ ← 1TB NVMe   │    │              │               │
+│  └──────────────┘    └──────────────┘    └──────────────┘               │
+│         ↓                    ↓                    ↓                     │
+│   Longhorn + local-path storage on each node                            │
+│         ↓                    ↓                    ↓                     │
+│   All services accessible via ingress-nginx + TLS                       │
+│         ↓                    ↓                    ↓                     │ 
+│   Pi-hole DNS on MetalLB IP (10.0.0.1)                                  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
